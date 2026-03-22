@@ -44,7 +44,7 @@ namespace DevionGames.LoginSystem
             {
                 if (LoginManager.DefaultSettings.debug)
                     Debug.Log("Login System is disabled...Loading " + LoginManager.DefaultSettings.sceneToLoad + " scene.");
-                UnityEngine.SceneManagement.SceneManager.LoadScene(LoginManager.DefaultSettings.sceneToLoad);
+                UnityEngine.SceneManagement.SceneManager.LoadScene("SampleScene");
             }
             else
             {
