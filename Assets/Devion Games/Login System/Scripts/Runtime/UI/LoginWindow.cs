@@ -86,7 +86,7 @@ namespace DevionGames.LoginSystem
             Execute("OnLogin",new CallbackEventData());
             if (LoginManager.DefaultSettings.loadSceneOnLogin)
             {
-                UnityEngine.SceneManagement.SceneManager.LoadScene(LoginManager.DefaultSettings.sceneToLoad);
+                UnityEngine.SceneManagement.SceneManager.LoadScene("SampleScene");
             }
         }
 
