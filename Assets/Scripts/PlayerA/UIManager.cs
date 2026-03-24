@@ -1,4 +1,4 @@
-using UnityEngine;
+ï»¿using UnityEngine;
 using UnityEngine.UI;
 
 public class UIManager : MonoBehaviour
@@ -10,22 +10,26 @@ public class UIManager : MonoBehaviour
         Instance = this;
     }
 
-    // Ãæ°å
+    // é¢æ¿
     public GameObject loginPanel;
     public GameObject mainPanel;
     public GameObject roomPanel;
 
-    // µÇÂ¼
+    // ç™»å½•
     public Button startButton;
 
-    // Ö÷½çÃæ
+    // ä¸»ç•Œé¢
     public Button createRoomButton;
     public Button joinRoomButton;
     public InputField roomIdInput;
 
-    // ·¿¼ä
+    // æˆ¿é—´
     public Text roomIdText;
-    public Text playerListText;
     public Button readyButton;
     public Text statusText;
+    public Button backButton;
+
+    // â­ æ–°å¢ï¼ˆå…³é”®ï¼‰
+    public Transform playerListParent;
+    public GameObject playerItemPrefab;
 }

@@ -1,10 +1,13 @@
-using UnityEngine;
+ï»¿using UnityEngine;
 using Unity.Services.Lobbies;
 using Unity.Services.Lobbies.Models;
 using Unity.Services.Authentication;
 using System.Threading.Tasks;
 using System.Collections.Generic;
 using Multiplayer;
+using Unity.Netcode;
+using UnityEngine.UI;
+using UnityEngine.SceneManagement;
 
 public class RoomController : MonoBehaviour
 {
@@ -13,14 +16,16 @@ public class RoomController : MonoBehaviour
     private bool isCountingDown = false;
     private float timer = 0f;
 
-    private bool isCreatingRoom = false;   // ·ÀÖ¹ÖØ¸´µã»÷
+    private bool isCreatingRoom = false;
     private bool isJoiningRoom = false;
+
+    private int lastPlayerCount = 0;
 
     void Start()
     {
         if (UIManager.Instance == null)
         {
-            Debug.LogError("UIManagerÃ»ÓĞ³õÊ¼»¯£¡");
+            Debug.LogError("UIManageræ²¡æœ‰åˆå§‹åŒ–ï¼");
             return;
         }
 
@@ -33,57 +38,62 @@ public class RoomController : MonoBehaviour
         });
 
         UIManager.Instance.readyButton.onClick.AddListener(SetReady);
+        UIManager.Instance.backButton.onClick.AddListener(OnClickBack);
     }
 
-    // ================= ´´½¨·¿¼ä =================
+    // ================= è¿”å› =================
+    public void OnClickBack()
+    {
+        if (NetworkManager.Singleton != null)
+        {
+            NetworkManager.Singleton.Shutdown();
+        }
+
+        UIManager.Instance.roomPanel.SetActive(false);
+        UIManager.Instance.mainPanel.SetActive(true);
+
+        currentLobby = null;
+        isCountingDown = false;
+    }
+
+    // ================= åˆ›å»ºæˆ¿é—´ =================
     public async void OnClickCreateRoom()
     {
-        if (isCreatingRoom) return; // ?? ·ÀÁ¬µã
+        if (isCreatingRoom) return;
         isCreatingRoom = true;
 
         try
         {
-            Debug.Log("µã»÷´´½¨·¿¼ä");
-
             currentLobby = await LobbyService.Instance.CreateLobbyAsync("MyRoom", 3);
-
-            Debug.Log("·¿¼ä´´½¨³É¹¦£º" + currentLobby.Id);
 
             UIManager.Instance.mainPanel.SetActive(false);
             UIManager.Instance.roomPanel.SetActive(true);
-            UIManager.Instance.roomIdText.text = "·¿¼äºÅ£º" + currentLobby.Id;
+            UIManager.Instance.roomIdText.text = "æˆ¿é—´å·ï¼š" + currentLobby.Id;
 
-            // ?? Æô¶¯Relay
             string relayCode = await NetworkGameManager.Instance.StartHostWithRelay();
 
             if (string.IsNullOrEmpty(relayCode))
             {
-                Debug.LogError("Relay´´½¨Ê§°Ü");
+                Debug.LogError("Relayåˆ›å»ºå¤±è´¥");
                 return;
             }
 
-            // ?? Ğ´ÈëLobby
             await LobbyService.Instance.UpdateLobbyAsync(
                 currentLobby.Id,
                 new UpdateLobbyOptions
                 {
                     Data = new Dictionary<string, DataObject>
                     {
-                        {
-                            "relayCode",
-                            new DataObject(DataObject.VisibilityOptions.Public, relayCode)
-                        }
+                        { "relayCode", new DataObject(DataObject.VisibilityOptions.Public, relayCode) }
                     }
                 }
             );
-
-            Debug.Log("RelayCodeĞ´ÈëLobby³É¹¦£º" + relayCode);
 
             UpdatePlayerList();
         }
         catch (System.Exception e)
         {
-            Debug.LogError("´´½¨·¿¼äÊ§°Ü£º" + e);
+            Debug.LogError("åˆ›å»ºæˆ¿é—´å¤±è´¥ï¼š" + e);
         }
         finally
         {
@@ -91,42 +101,35 @@ public class RoomController : MonoBehaviour
         }
     }
 
-    // ================= ¼ÓÈë·¿¼ä =================
+    // ================= åŠ å…¥æˆ¿é—´ =================
     public async void OnClickJoinRoom(string lobbyId)
     {
-        if (isJoiningRoom) return; // ?? ·ÀÁ¬µã
+        if (isJoiningRoom) return;
         isJoiningRoom = true;
 
         try
         {
-            Debug.Log("¼ÓÈë·¿¼ä£º" + lobbyId);
-
             currentLobby = await LobbyService.Instance.JoinLobbyByIdAsync(lobbyId);
 
             UIManager.Instance.mainPanel.SetActive(false);
             UIManager.Instance.roomPanel.SetActive(true);
-            UIManager.Instance.roomIdText.text = "·¿¼äºÅ£º" + currentLobby.Id;
+            UIManager.Instance.roomIdText.text = "æˆ¿é—´å·ï¼š" + currentLobby.Id;
 
-            // ? µÈ´ıRelayCode£¨½µµÍÆµÂÊ£¡£¡£©
             int retry = 0;
             while ((currentLobby.Data == null || !currentLobby.Data.ContainsKey("relayCode")) && retry < 10)
             {
-                Debug.Log("µÈ´ıHost´´½¨Relay...");
-                await Task.Delay(2000); // ?? ´Ó1Ãë¸Ä³É2Ãë£¨±ÜÃâ429£©
-
+                await Task.Delay(2000);
                 currentLobby = await LobbyService.Instance.GetLobbyAsync(currentLobby.Id);
                 retry++;
             }
 
-            if (!currentLobby.Data.ContainsKey("relayCode"))
+            if (currentLobby.Data == null || !currentLobby.Data.ContainsKey("relayCode"))
             {
-                Debug.LogError("»ñÈ¡RelayCodeÊ§°Ü");
+                Debug.LogError("è·å–RelayCodeå¤±è´¥");
                 return;
             }
 
             string relayCode = currentLobby.Data["relayCode"].Value;
-
-            Debug.Log("»ñÈ¡µ½RelayCode£º" + relayCode);
 
             await NetworkGameManager.Instance.StartClientWithRelay(relayCode);
 
@@ -134,7 +137,7 @@ public class RoomController : MonoBehaviour
         }
         catch (System.Exception e)
         {
-            Debug.LogError("¼ÓÈë·¿¼äÊ§°Ü£º" + e);
+            Debug.LogError("åŠ å…¥æˆ¿é—´å¤±è´¥ï¼š" + e);
         }
         finally
         {
@@ -142,62 +145,89 @@ public class RoomController : MonoBehaviour
         }
     }
 
-    // ================= ¸üĞÂÍæ¼ÒÁĞ±í =================
+    // ================= â­ ç©å®¶åˆ—è¡¨ =================
     void UpdatePlayerList()
     {
         if (currentLobby == null || currentLobby.Players == null) return;
 
-        string text = "";
+        Transform parent = UIManager.Instance.playerListParent;
+        GameObject prefab = UIManager.Instance.playerItemPrefab;
+
+        // æ¸…ç©º
+        foreach (Transform child in parent)
+        {
+            Destroy(child.gameObject);
+        }
 
         foreach (var player in currentLobby.Players)
         {
-            text += player.Id + "\n";
-        }
+            GameObject item = Instantiate(prefab, parent);
 
-        if (UIManager.Instance != null && UIManager.Instance.playerListText != null)
-        {
-            UIManager.Instance.playerListText.text = text;
+            Transform nameTf = item.transform.Find("NameText");
+            Transform readyTf = item.transform.Find("ReadyText");
+            Transform youTf = item.transform.Find("YouText");
+            Transform avatarTf = item.transform.Find("AvatarImage");
+
+            if (nameTf == null || readyTf == null) continue;
+
+            Text nameText = nameTf.GetComponent<Text>();
+            Text readyText = readyTf.GetComponent<Text>();
+            Text youText = youTf ? youTf.GetComponent<Text>() : null;
+            Image avatarImg = avatarTf ? avatarTf.GetComponent<Image>() : null;
+
+            // ===== åå­— =====
+            string shortId = player.Id.Substring(0, 4);
+            nameText.text = "ç©å®¶ " + shortId;
+
+            if (player.Id == currentLobby.HostId)
+                nameText.text += " (æˆ¿ä¸»)";
+
+            // ===== å‡†å¤‡çŠ¶æ€ =====
+            if (player.Data != null &&
+                player.Data.ContainsKey("ready") &&
+                player.Data["ready"].Value == "true")
+                readyText.text = "å·²å‡†å¤‡";
+            else
+                readyText.text = "æœªå‡†å¤‡";
+
+            // ===== è‡ªå·± =====
+            if (youText != null)
+                youText.gameObject.SetActive(player.Id == AuthenticationService.Instance.PlayerId);
+
+            // ===== â­ å¤´åƒï¼ˆè°ƒç”¨ç‹¬ç«‹è„šæœ¬ï¼‰=====
+            if (avatarImg != null && AvatarManager.Instance != null)
+            {
+                avatarImg.sprite = AvatarManager.Instance.GetAvatar(player.Id);
+            }
         }
 
         CheckAllReady();
     }
 
-    // ================= µã»÷×¼±¸ =================
+    // ================= å‡†å¤‡ =================
     public async void SetReady()
     {
         if (currentLobby == null) return;
 
-        try
-        {
-            Debug.Log("µã»÷×¼±¸");
-
-            await LobbyService.Instance.UpdatePlayerAsync(
-                currentLobby.Id,
-                AuthenticationService.Instance.PlayerId,
-                new UpdatePlayerOptions
+        await LobbyService.Instance.UpdatePlayerAsync(
+            currentLobby.Id,
+            AuthenticationService.Instance.PlayerId,
+            new UpdatePlayerOptions
+            {
+                Data = new Dictionary<string, PlayerDataObject>
                 {
-                    Data = new Dictionary<string, PlayerDataObject>
-                    {
-                        {
-                            "ready",
-                            new PlayerDataObject(PlayerDataObject.VisibilityOptions.Public, "true")
-                        }
-                    }
+                    { "ready", new PlayerDataObject(PlayerDataObject.VisibilityOptions.Public, "true") }
                 }
-            );
+            }
+        );
 
-            UIManager.Instance.statusText.text = "ÒÑ×¼±¸";
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError("×¼±¸Ê§°Ü£º" + e);
-        }
+        UIManager.Instance.statusText.text = "å·²å‡†å¤‡";
     }
 
-    // ================= ¼ì²é×¼±¸ =================
+    // ================= æ£€æŸ¥å‡†å¤‡ =================
     void CheckAllReady()
     {
-        if (currentLobby == null || currentLobby.Players == null) return;
+        if (currentLobby == null) return;
 
         foreach (var player in currentLobby.Players)
         {
@@ -205,7 +235,7 @@ public class RoomController : MonoBehaviour
                 !player.Data.ContainsKey("ready") ||
                 player.Data["ready"].Value != "true")
             {
-                UIManager.Instance.statusText.text = "µÈ´ıÍæ¼Ò×¼±¸...";
+                UIManager.Instance.statusText.text = "ç­‰å¾…ç©å®¶å‡†å¤‡...";
                 return;
             }
         }
@@ -217,24 +247,27 @@ public class RoomController : MonoBehaviour
         }
     }
 
-    // ================= µ¹¼ÆÊ± =================
+    // ================= â­ å¼€å§‹æ¸¸æˆ =================
     System.Collections.IEnumerator StartGameCountdown()
     {
-        UIManager.Instance.statusText.text = "3Ãëºó¿ªÊ¼ÓÎÏ·";
+        UIManager.Instance.statusText.text = "3ç§’åå¼€å§‹æ¸¸æˆ";
 
         yield return new WaitForSeconds(3);
 
-        UIManager.Instance.statusText.text = "ÓÎÏ·¿ªÊ¼£¡";
+        if (NetworkManager.Singleton.IsHost)
+        {
+            NetworkManager.Singleton.SceneManager.LoadScene("GameScene", LoadSceneMode.Single);
+        }
     }
 
-    // ================= LobbyË¢ĞÂ£¨½µÆµ°æ£© =================
+    // ================= Lobbyåˆ·æ–° =================
     void Update()
     {
         if (currentLobby == null) return;
 
         timer += Time.deltaTime;
 
-        if (timer >= 5f) // ?? ´Ó2Ãë¸Ä³É5Ãë£¨¹Ø¼ü£¡£©
+        if (timer >= 1f)
         {
             timer = 0f;
             RefreshLobby();
@@ -245,12 +278,23 @@ public class RoomController : MonoBehaviour
     {
         try
         {
-            currentLobby = await LobbyService.Instance.GetLobbyAsync(currentLobby.Id);
+            Lobby newLobby = await LobbyService.Instance.GetLobbyAsync(currentLobby.Id);
+
+            // â­ äººæ•°å˜åŒ–æ‰é‡ç‚¹åˆ·æ–°
+            if (newLobby.Players.Count != lastPlayerCount)
+            {
+                lastPlayerCount = newLobby.Players.Count;
+                currentLobby = newLobby;
+                UpdatePlayerList();
+                return;
+            }
+
+            currentLobby = newLobby;
             UpdatePlayerList();
         }
         catch
         {
-            Debug.Log("LobbyË¢ĞÂÊ§°Ü£¨ÏŞÁ÷»òÍøÂçÎÊÌâ£©");
+            Debug.Log("Lobbyåˆ·æ–°å¤±è´¥");
         }
     }
 }
