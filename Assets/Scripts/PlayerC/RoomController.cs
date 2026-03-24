@@ -4,17 +4,26 @@ using Unity.Services.Lobbies.Models;
 using Unity.Services.Authentication;
 using System.Threading.Tasks;
 using System.Collections.Generic;
-using Multiplayer; // ? 必须加这个
+using Multiplayer;
 
 public class RoomController : MonoBehaviour
 {
     private Lobby currentLobby;
+
     private bool isCountingDown = false;
-    private float timer = 0f; // ? 控制刷新频率
+    private float timer = 0f;
+
+    private bool isCreatingRoom = false;   // 防止重复点击
+    private bool isJoiningRoom = false;
 
     void Start()
     {
-        // ?? 按钮绑定
+        if (UIManager.Instance == null)
+        {
+            Debug.LogError("UIManager没有初始化！");
+            return;
+        }
+
         UIManager.Instance.createRoomButton.onClick.AddListener(OnClickCreateRoom);
 
         UIManager.Instance.joinRoomButton.onClick.AddListener(() =>
@@ -26,9 +35,12 @@ public class RoomController : MonoBehaviour
         UIManager.Instance.readyButton.onClick.AddListener(SetReady);
     }
 
-    // ================= 创建房间（Host） =================
+    // ================= 创建房间 =================
     public async void OnClickCreateRoom()
     {
+        if (isCreatingRoom) return; // ?? 防连点
+        isCreatingRoom = true;
+
         try
         {
             Debug.Log("点击创建房间");
@@ -37,13 +49,11 @@ public class RoomController : MonoBehaviour
 
             Debug.Log("房间创建成功：" + currentLobby.Id);
 
-            // ?? 切UI
             UIManager.Instance.mainPanel.SetActive(false);
             UIManager.Instance.roomPanel.SetActive(true);
-
             UIManager.Instance.roomIdText.text = "房间号：" + currentLobby.Id;
 
-            // ? 启动Relay（Host）
+            // ?? 启动Relay
             string relayCode = await NetworkGameManager.Instance.StartHostWithRelay();
 
             if (string.IsNullOrEmpty(relayCode))
@@ -52,14 +62,17 @@ public class RoomController : MonoBehaviour
                 return;
             }
 
-            // ? 把relayCode写进Lobby
+            // ?? 写入Lobby
             await LobbyService.Instance.UpdateLobbyAsync(
                 currentLobby.Id,
                 new UpdateLobbyOptions
                 {
                     Data = new Dictionary<string, DataObject>
                     {
-                        { "relayCode", new DataObject(DataObject.VisibilityOptions.Public, relayCode) }
+                        {
+                            "relayCode",
+                            new DataObject(DataObject.VisibilityOptions.Public, relayCode)
+                        }
                     }
                 }
             );
@@ -70,13 +83,20 @@ public class RoomController : MonoBehaviour
         }
         catch (System.Exception e)
         {
-            Debug.LogError("创建房间失败：" + e.Message);
+            Debug.LogError("创建房间失败：" + e);
+        }
+        finally
+        {
+            isCreatingRoom = false;
         }
     }
 
-    // ================= 加入房间（Client） =================
+    // ================= 加入房间 =================
     public async void OnClickJoinRoom(string lobbyId)
     {
+        if (isJoiningRoom) return; // ?? 防连点
+        isJoiningRoom = true;
+
         try
         {
             Debug.Log("加入房间：" + lobbyId);
@@ -85,37 +105,47 @@ public class RoomController : MonoBehaviour
 
             UIManager.Instance.mainPanel.SetActive(false);
             UIManager.Instance.roomPanel.SetActive(true);
-
             UIManager.Instance.roomIdText.text = "房间号：" + currentLobby.Id;
 
-            // ? 等待Host写入relayCode（防止Key报错）
-            while (!currentLobby.Data.ContainsKey("relayCode"))
+            // ? 等待RelayCode（降低频率！！）
+            int retry = 0;
+            while ((currentLobby.Data == null || !currentLobby.Data.ContainsKey("relayCode")) && retry < 10)
             {
                 Debug.Log("等待Host创建Relay...");
-                await Task.Delay(1000);
+                await Task.Delay(2000); // ?? 从1秒改成2秒（避免429）
 
                 currentLobby = await LobbyService.Instance.GetLobbyAsync(currentLobby.Id);
+                retry++;
+            }
+
+            if (!currentLobby.Data.ContainsKey("relayCode"))
+            {
+                Debug.LogError("获取RelayCode失败");
+                return;
             }
 
             string relayCode = currentLobby.Data["relayCode"].Value;
 
             Debug.Log("获取到RelayCode：" + relayCode);
 
-            // ? 启动Client
             await NetworkGameManager.Instance.StartClientWithRelay(relayCode);
 
             UpdatePlayerList();
         }
         catch (System.Exception e)
         {
-            Debug.LogError("加入房间失败：" + e.Message);
+            Debug.LogError("加入房间失败：" + e);
+        }
+        finally
+        {
+            isJoiningRoom = false;
         }
     }
 
     // ================= 更新玩家列表 =================
     void UpdatePlayerList()
     {
-        if (currentLobby == null) return;
+        if (currentLobby == null || currentLobby.Players == null) return;
 
         string text = "";
 
@@ -124,7 +154,10 @@ public class RoomController : MonoBehaviour
             text += player.Id + "\n";
         }
 
-        UIManager.Instance.playerListText.text = text;
+        if (UIManager.Instance != null && UIManager.Instance.playerListText != null)
+        {
+            UIManager.Instance.playerListText.text = text;
+        }
 
         CheckAllReady();
     }
@@ -132,37 +165,45 @@ public class RoomController : MonoBehaviour
     // ================= 点击准备 =================
     public async void SetReady()
     {
+        if (currentLobby == null) return;
+
         try
         {
             Debug.Log("点击准备");
 
-            var data = new Dictionary<string, PlayerDataObject>()
-            {
-                { "ready", new PlayerDataObject(PlayerDataObject.VisibilityOptions.Public, "true") }
-            };
-
             await LobbyService.Instance.UpdatePlayerAsync(
                 currentLobby.Id,
                 AuthenticationService.Instance.PlayerId,
-                new UpdatePlayerOptions { Data = data }
+                new UpdatePlayerOptions
+                {
+                    Data = new Dictionary<string, PlayerDataObject>
+                    {
+                        {
+                            "ready",
+                            new PlayerDataObject(PlayerDataObject.VisibilityOptions.Public, "true")
+                        }
+                    }
+                }
             );
 
             UIManager.Instance.statusText.text = "已准备";
         }
         catch (System.Exception e)
         {
-            Debug.LogError("准备失败：" + e.Message);
+            Debug.LogError("准备失败：" + e);
         }
     }
 
-    // ================= 检查是否全部准备 =================
+    // ================= 检查准备 =================
     void CheckAllReady()
     {
-        if (currentLobby == null) return;
+        if (currentLobby == null || currentLobby.Players == null) return;
 
         foreach (var player in currentLobby.Players)
         {
-            if (!player.Data.ContainsKey("ready") || player.Data["ready"].Value != "true")
+            if (player.Data == null ||
+                !player.Data.ContainsKey("ready") ||
+                player.Data["ready"].Value != "true")
             {
                 UIManager.Instance.statusText.text = "等待玩家准备...";
                 return;
@@ -184,19 +225,16 @@ public class RoomController : MonoBehaviour
         yield return new WaitForSeconds(3);
 
         UIManager.Instance.statusText.text = "游戏开始！";
-
-        // ?? 下一步：切场景（你后面做）
-        // SceneManager.LoadScene("Game");
     }
 
-    // ================= 定时刷新Lobby（替代async Update） =================
+    // ================= Lobby刷新（降频版） =================
     void Update()
     {
         if (currentLobby == null) return;
 
         timer += Time.deltaTime;
 
-        if (timer >= 2f)
+        if (timer >= 5f) // ?? 从2秒改成5秒（关键！）
         {
             timer = 0f;
             RefreshLobby();
@@ -212,7 +250,7 @@ public class RoomController : MonoBehaviour
         }
         catch
         {
-            Debug.Log("Lobby刷新失败");
+            Debug.Log("Lobby刷新失败（限流或网络问题）");
         }
     }
 }
