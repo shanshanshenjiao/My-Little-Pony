@@ -212,6 +212,8 @@ GameObject:
   - component: {fileID: 41479417}
   - component: {fileID: 41479416}
   - component: {fileID: 41479415}
+  - component: {fileID: 41479418}
+  - component: {fileID: 41479419}
   m_Layer: 0
   m_Name: GameManager
   m_TagString: Untagged
@@ -231,6 +233,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 568eae95038f86f44ae2d539f4c35e1e, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  playerListUI: {fileID: 41479418}
+  stateChecker: {fileID: 41479419}
 --- !u!114 &41479416
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -258,6 +262,32 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &41479418
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 41479414}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 774796e9066503c41b266b700e8819e2, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  parent: {fileID: 1433288590}
+  prefab: {fileID: 6053386846249525594, guid: c7ffd5d8d53552542aa925f42e93f10d, type: 3}
+--- !u!114 &41479419
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 41479414}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: db460c2b65118964eba63e66bfe7cc82, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
 --- !u!1 &70999351
 GameObject:
   m_ObjectHideFlags: 0
@@ -858,6 +888,7 @@ MonoBehaviour:
   roomIdInput: {fileID: 894132014}
   roomIdText: {fileID: 333856427}
   readyButton: {fileID: 634155305}
+  startGameButton: {fileID: 748898290}
   statusText: {fileID: 41181525}
   backButton: {fileID: 334307744}
   playerListParent: {fileID: 1433288590}

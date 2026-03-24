@@ -26,6 +26,7 @@ public class UIManager : MonoBehaviour
     // 房间
     public Text roomIdText;
     public Button readyButton;
+    public Button startGameButton;
     public Text statusText;
     public Button backButton;
 
