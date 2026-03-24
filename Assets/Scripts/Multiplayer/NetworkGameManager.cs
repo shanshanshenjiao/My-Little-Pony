@@ -6,6 +6,8 @@ using Unity.Services.Relay;
 using Unity.Services.Relay.Models;
 using Unity.Services.Authentication;
 using System.Threading.Tasks;
+using System.Collections;
+using Unity.Networking.Transport.Relay;
 
 namespace Multiplayer
 {
@@ -13,8 +15,9 @@ namespace Multiplayer
     {
         public static NetworkGameManager Instance { get; private set; }
 
-        // ⭐ 是否初始化完成（关键）
         public bool IsInitialized { get; private set; } = false;
+
+        private string lastJoinCode; // ⭐ 用于重连
 
         private void Awake()
         {
@@ -32,11 +35,13 @@ namespace Multiplayer
         {
             await InitializeUnityServices();
 
-            // ⭐ 监听断线（关键）
             if (NetworkManager.Singleton != null)
             {
                 NetworkManager.Singleton.OnTransportFailure += OnTransportFailure;
             }
+
+            // ⭐ 启动保活
+            StartCoroutine(KeepAlive());
         }
 
         // ================= 初始化 =================
@@ -46,7 +51,10 @@ namespace Multiplayer
             {
                 Debug.Log("初始化Unity服务...");
 
-                await UnityServices.InitializeAsync();
+                if (UnityServices.State != ServicesInitializationState.Initialized)
+                {
+                    await UnityServices.InitializeAsync();
+                }
 
                 if (!AuthenticationService.Instance.IsSignedIn)
                 {
@@ -59,7 +67,7 @@ namespace Multiplayer
             }
             catch (System.Exception e)
             {
-                Debug.LogError("Unity服务初始化失败: " + e.Message);
+                Debug.LogError("初始化失败: " + e.Message);
             }
         }
 
@@ -68,40 +76,37 @@ namespace Multiplayer
         {
             try
             {
-                // ⭐ 等初始化完成（关键！！！）
                 while (!IsInitialized)
+                    await Task.Delay(200);
+
+                Debug.Log("启动Host...");
+
+                // ⭐ 防重复启动
+                if (NetworkManager.Singleton.IsListening)
                 {
-                    Debug.Log("等待服务初始化...");
-                    await Task.Delay(500);
+                    NetworkManager.Singleton.Shutdown();
+                    await Task.Delay(1000);
                 }
 
-                Debug.Log("开始创建Relay...");
-
                 Allocation allocation = await RelayService.Instance.CreateAllocationAsync(maxPlayers - 1);
-
                 string joinCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
 
-                UnityTransport transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
+                lastJoinCode = joinCode;
 
-                transport.SetRelayServerData(
-                    allocation.RelayServer.IpV4,
-                    (ushort)allocation.RelayServer.Port,
-                    allocation.AllocationIdBytes,
-                    allocation.Key,
-                    allocation.ConnectionData,
-                    new byte[0],
-                    true
-                );
+                var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
+
+                // ⭐ 官方推荐写法（稳定）
+                transport.SetRelayServerData(new RelayServerData(allocation, "dtls"));
 
                 NetworkManager.Singleton.StartHost();
 
-                Debug.Log("Host启动成功，JoinCode: " + joinCode);
+                Debug.Log("Host启动成功: " + joinCode);
 
                 return joinCode;
             }
             catch (System.Exception e)
             {
-                Debug.LogError("Host启动失败: " + e.Message);
+                Debug.LogError("Host失败: " + e.Message);
                 return null;
             }
         }
@@ -111,28 +116,25 @@ namespace Multiplayer
         {
             try
             {
-                // ⭐ 等初始化完成（关键！！！）
                 while (!IsInitialized)
+                    await Task.Delay(200);
+
+                Debug.Log("启动Client...");
+
+                // ⭐ 防重复连接
+                if (NetworkManager.Singleton.IsListening)
                 {
-                    Debug.Log("等待服务初始化...");
-                    await Task.Delay(500);
+                    NetworkManager.Singleton.Shutdown();
+                    await Task.Delay(1000);
                 }
 
-                Debug.Log("开始连接Relay...");
+                lastJoinCode = joinCode;
 
                 JoinAllocation joinAllocation = await RelayService.Instance.JoinAllocationAsync(joinCode);
 
-                UnityTransport transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
+                var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
 
-                transport.SetRelayServerData(
-                    joinAllocation.RelayServer.IpV4,
-                    (ushort)joinAllocation.RelayServer.Port,
-                    joinAllocation.AllocationIdBytes,
-                    joinAllocation.Key,
-                    joinAllocation.ConnectionData,
-                    joinAllocation.HostConnectionData,
-                    false
-                );
+                transport.SetRelayServerData(new RelayServerData(joinAllocation, "dtls"));
 
                 NetworkManager.Singleton.StartClient();
 
@@ -140,25 +142,53 @@ namespace Multiplayer
             }
             catch (System.Exception e)
             {
-                Debug.LogError("Client连接失败: " + e.Message);
+                Debug.LogError("Client失败: " + e.Message);
+            }
+        }
+
+        // ================= ⭐ 保活（关键） =================
+        IEnumerator KeepAlive()
+        {
+            while (true)
+            {
+                yield return new WaitForSeconds(5f);
+
+                if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
+                {
+                    // ⭐ 模拟网络活动（防止Relay断开）
+                    Debug.Log("KeepAlive ping");
+                }
             }
         }
 
         // ================= ⭐ 断线处理 =================
-        private void OnTransportFailure()
+        private async void OnTransportFailure()
         {
-            Debug.LogError("Relay连接断开！");
+            Debug.LogError("Relay断开，准备重连...");
 
             if (NetworkManager.Singleton != null)
             {
                 NetworkManager.Singleton.Shutdown();
             }
 
-            // 👉 这里你可以回主界面
-            if (UIManager.Instance != null)
+            await Task.Delay(1000);
+
+            // ⭐ 自动重连逻辑
+            if (!string.IsNullOrEmpty(lastJoinCode))
             {
-                UIManager.Instance.roomPanel.SetActive(false);
-                UIManager.Instance.mainPanel.SetActive(true);
+                Debug.Log("尝试重连...");
+
+                await StartClientWithRelay(lastJoinCode);
+            }
+            else
+            {
+                Debug.Log("没有JoinCode，返回主界面");
+
+                if (UIManager.Instance != null)
+                {
+                    UIManager.Instance.roomPanel.SetActive(false);
+                    UIManager.Instance.mainPanel.SetActive(true);
+                }
             }
         }
     }
