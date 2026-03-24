@@ -13,18 +13,16 @@ public class RoomController : MonoBehaviour
 {
     private Lobby currentLobby;
 
-    private bool isCountingDown = false;
-    private float timer = 0f;
-
+    private bool isRefreshing = false;
     private bool isCreatingRoom = false;
     private bool isJoiningRoom = false;
 
-    private int lastPlayerCount = 0;
-    private bool isRefreshing = false;
+    private float timer = 0f;
+    private bool isCountingDown = false;
 
+    // ⭐ 玩家UI缓存
     private Dictionary<string, GameObject> playerItemDict = new Dictionary<string, GameObject>();
 
-    // ================= 初始化 =================
     void Start()
     {
         if (UIManager.Instance == null)
@@ -34,33 +32,36 @@ public class RoomController : MonoBehaviour
         }
 
         UIManager.Instance.createRoomButton.onClick.AddListener(OnClickCreateRoom);
-
         UIManager.Instance.joinRoomButton.onClick.AddListener(() =>
         {
-            string id = UIManager.Instance.roomIdInput.text;
-            OnClickJoinRoom(id);
+            OnClickJoinRoom(UIManager.Instance.roomIdInput.text);
         });
-
         UIManager.Instance.readyButton.onClick.AddListener(SetReady);
         UIManager.Instance.backButton.onClick.AddListener(OnClickBack);
     }
 
-    // ================= 心跳（防止Lobby消失） =================
-    private async void HeartbeatLoop()
+    // ================= 清理UI =================
+    void ClearPlayerUI()
+    {
+        foreach (var item in playerItemDict.Values)
+        {
+            if (item != null)
+                Destroy(item);
+        }
+        playerItemDict.Clear();
+    }
+
+    // ================= 心跳 =================
+    async void HeartbeatLoop()
     {
         while (currentLobby != null)
         {
             await Task.Delay(15000);
-
             try
             {
                 await LobbyService.Instance.SendHeartbeatPingAsync(currentLobby.Id);
-                Debug.Log("发送心跳");
             }
-            catch (LobbyServiceException e)
-            {
-                Debug.LogError("心跳失败: " + e.Reason);
-            }
+            catch { }
         }
     }
 
@@ -73,16 +74,14 @@ public class RoomController : MonoBehaviour
             {
                 await LobbyService.Instance.RemovePlayerAsync(
                     currentLobby.Id,
-                    AuthenticationService.Instance.PlayerId
-                );
+                    AuthenticationService.Instance.PlayerId);
             }
             catch { }
         }
 
-        if (NetworkManager.Singleton != null)
-        {
-            NetworkManager.Singleton.Shutdown();
-        }
+        ClearPlayerUI();
+
+        NetworkManager.Singleton?.Shutdown();
 
         UIManager.Instance.roomPanel.SetActive(false);
         UIManager.Instance.mainPanel.SetActive(true);
@@ -97,11 +96,11 @@ public class RoomController : MonoBehaviour
         if (isCreatingRoom) return;
         isCreatingRoom = true;
 
+        ClearPlayerUI();
+
         try
         {
             currentLobby = await LobbyService.Instance.CreateLobbyAsync("MyRoom", 3);
-
-            // ⭐ 启动心跳
             HeartbeatLoop();
 
             UIManager.Instance.mainPanel.SetActive(false);
@@ -110,22 +109,17 @@ public class RoomController : MonoBehaviour
 
             string relayCode = await NetworkGameManager.Instance.StartHostWithRelay();
 
-            if (string.IsNullOrEmpty(relayCode))
+            if (!string.IsNullOrEmpty(relayCode))
             {
-                Debug.LogError("Relay创建失败");
-                return;
-            }
-
-            await LobbyService.Instance.UpdateLobbyAsync(
-                currentLobby.Id,
-                new UpdateLobbyOptions
-                {
-                    Data = new Dictionary<string, DataObject>
+                await LobbyService.Instance.UpdateLobbyAsync(currentLobby.Id,
+                    new UpdateLobbyOptions
                     {
-                        { "relayCode", new DataObject(DataObject.VisibilityOptions.Public, relayCode) }
-                    }
-                }
-            );
+                        Data = new Dictionary<string, DataObject>
+                        {
+                            { "relayCode", new DataObject(DataObject.VisibilityOptions.Public, relayCode) }
+                        }
+                    });
+            }
 
             UpdatePlayerList();
         }
@@ -133,10 +127,8 @@ public class RoomController : MonoBehaviour
         {
             Debug.LogError("创建房间失败：" + e);
         }
-        finally
-        {
-            isCreatingRoom = false;
-        }
+
+        isCreatingRoom = false;
     }
 
     // ================= 加入房间 =================
@@ -144,6 +136,8 @@ public class RoomController : MonoBehaviour
     {
         if (isJoiningRoom) return;
         isJoiningRoom = true;
+
+        ClearPlayerUI();
 
         try
         {
@@ -153,24 +147,21 @@ public class RoomController : MonoBehaviour
             UIManager.Instance.roomPanel.SetActive(true);
             UIManager.Instance.roomIdText.text = "房间号：" + currentLobby.Id;
 
-            int retry = 0;
-
-            while ((currentLobby.Data == null || !currentLobby.Data.ContainsKey("relayCode")) && retry < 10)
+            // 等待 relayCode
+            for (int i = 0; i < 10; i++)
             {
+                if (currentLobby.Data != null && currentLobby.Data.ContainsKey("relayCode"))
+                    break;
+
                 await Task.Delay(2000);
                 currentLobby = await LobbyService.Instance.GetLobbyAsync(currentLobby.Id);
-                retry++;
             }
 
-            if (currentLobby.Data == null || !currentLobby.Data.ContainsKey("relayCode"))
+            if (currentLobby.Data != null && currentLobby.Data.ContainsKey("relayCode"))
             {
-                Debug.LogError("获取RelayCode失败");
-                return;
+                string relayCode = currentLobby.Data["relayCode"].Value;
+                await NetworkGameManager.Instance.StartClientWithRelay(relayCode);
             }
-
-            string relayCode = currentLobby.Data["relayCode"].Value;
-
-            await NetworkGameManager.Instance.StartClientWithRelay(relayCode);
 
             UpdatePlayerList();
         }
@@ -178,13 +169,11 @@ public class RoomController : MonoBehaviour
         {
             Debug.LogError("加入房间失败：" + e);
         }
-        finally
-        {
-            isJoiningRoom = false;
-        }
+
+        isJoiningRoom = false;
     }
 
-    // ================= 玩家列表 =================
+    // ================= 玩家列表（核心稳定版） =================
     void UpdatePlayerList()
     {
         if (currentLobby == null || currentLobby.Players == null) return;
@@ -196,67 +185,56 @@ public class RoomController : MonoBehaviour
 
         foreach (var player in currentLobby.Players)
         {
-            string playerId = player.Id;
-            currentIds.Add(playerId);
+            string id = player.Id;
+            currentIds.Add(id);
 
-            GameObject item;
-
-            // ===== 已存在 → 更新 =====
-            if (playerItemDict.ContainsKey(playerId))
-            {
-                item = playerItemDict[playerId];
-            }
-            // ===== 新玩家 → 创建 =====
-            else
+            // ⭐ 核心：安全获取
+            if (!playerItemDict.TryGetValue(id, out GameObject item) || item == null)
             {
                 item = Instantiate(prefab, parent);
-                playerItemDict[playerId] = item;
+                playerItemDict[id] = item;
             }
 
-            // ===== 更新UI =====
-            Text nameText = item.transform.Find("NameText")?.GetComponent<Text>();
-            Text readyText = item.transform.Find("ReadyText")?.GetComponent<Text>();
-            Text youText = item.transform.Find("YouText")?.GetComponent<Text>();
-            Image avatarImg = item.transform.Find("AvatarImage")?.GetComponent<Image>();
+            // 更新UI
+            Text name = item.transform.Find("NameText")?.GetComponent<Text>();
+            Text ready = item.transform.Find("ReadyText")?.GetComponent<Text>();
+            Text you = item.transform.Find("YouText")?.GetComponent<Text>();
+            Image avatar = item.transform.Find("AvatarImage")?.GetComponent<Image>();
 
-            if (nameText == null || readyText == null) continue;
+            if (name == null || ready == null) continue;
 
-            string shortId = playerId.Substring(0, 4);
-            nameText.text = "玩家 " + shortId;
+            string shortId = id.Length > 4 ? id.Substring(0, 4) : id;
+            name.text = "玩家 " + shortId + (id == currentLobby.HostId ? " (房主)" : "");
 
-            if (playerId == currentLobby.HostId)
-                nameText.text += " (房主)";
+            bool isReady = player.Data != null &&
+                           player.Data.ContainsKey("ready") &&
+                           player.Data["ready"].Value == "true";
 
-            if (player.Data != null &&
-                player.Data.ContainsKey("ready") &&
-                player.Data["ready"].Value == "true")
-                readyText.text = "已准备";
-            else
-                readyText.text = "未准备";
+            ready.text = isReady ? "已准备" : "未准备";
 
-            if (youText != null)
-                youText.gameObject.SetActive(playerId == AuthenticationService.Instance.PlayerId);
+            if (you != null)
+                you.gameObject.SetActive(id == AuthenticationService.Instance.PlayerId);
 
-            if (avatarImg != null && AvatarManager.Instance != null)
-                avatarImg.sprite = AvatarManager.Instance.GetAvatar(playerId);
+            if (avatar != null && AvatarManager.Instance != null)
+                avatar.sprite = AvatarManager.Instance.GetAvatar(id);
         }
 
-        // ===== ⭐ 删除已退出玩家 =====
-        List<string> toRemove = new List<string>();
+        // 删除退出玩家
+        List<string> removeList = new List<string>();
 
         foreach (var kvp in playerItemDict)
         {
             if (!currentIds.Contains(kvp.Key))
             {
-                Destroy(kvp.Value);
-                toRemove.Add(kvp.Key);
+                if (kvp.Value != null)
+                    Destroy(kvp.Value);
+
+                removeList.Add(kvp.Key);
             }
         }
 
-        foreach (var id in toRemove)
-        {
+        foreach (var id in removeList)
             playerItemDict.Remove(id);
-        }
 
         CheckAllReady();
     }
@@ -277,15 +255,11 @@ public class RoomController : MonoBehaviour
                     {
                         { "ready", new PlayerDataObject(PlayerDataObject.VisibilityOptions.Public, "true") }
                     }
-                }
-            );
+                });
 
             UIManager.Instance.statusText.text = "已准备";
         }
-        catch (LobbyServiceException e)
-        {
-            Debug.LogError("准备失败: " + e.Reason);
-        }
+        catch { }
     }
 
     // ================= 检查准备 =================
@@ -293,11 +267,11 @@ public class RoomController : MonoBehaviour
     {
         if (currentLobby == null) return;
 
-        foreach (var player in currentLobby.Players)
+        foreach (var p in currentLobby.Players)
         {
-            if (player.Data == null ||
-                !player.Data.ContainsKey("ready") ||
-                player.Data["ready"].Value != "true")
+            if (p.Data == null ||
+                !p.Data.ContainsKey("ready") ||
+                p.Data["ready"].Value != "true")
             {
                 UIManager.Instance.statusText.text = "等待玩家准备...";
                 return;
@@ -311,11 +285,9 @@ public class RoomController : MonoBehaviour
         }
     }
 
-    // ================= 开始游戏 =================
     System.Collections.IEnumerator StartGameCountdown()
     {
         UIManager.Instance.statusText.text = "3秒后开始游戏";
-
         yield return new WaitForSeconds(3);
 
         if (NetworkManager.Singleton.IsHost)
@@ -324,14 +296,14 @@ public class RoomController : MonoBehaviour
         }
     }
 
-    // ================= Lobby刷新 =================
+    // ================= 刷新 =================
     void Update()
     {
         if (currentLobby == null) return;
 
         timer += Time.deltaTime;
 
-        if (timer >= 2f) // ⭐ 降低请求频率
+        if (timer >= 2f)
         {
             timer = 0f;
             RefreshLobby();
@@ -345,14 +317,12 @@ public class RoomController : MonoBehaviour
 
         try
         {
-            Lobby newLobby = await LobbyService.Instance.GetLobbyAsync(currentLobby.Id);
-
-            currentLobby = newLobby;
+            currentLobby = await LobbyService.Instance.GetLobbyAsync(currentLobby.Id);
             UpdatePlayerList();
         }
         catch (LobbyServiceException e)
         {
-            Debug.LogError("Lobby刷新失败: " + e.Reason);
+            Debug.LogError("刷新失败: " + e.Reason);
         }
 
         isRefreshing = false;
